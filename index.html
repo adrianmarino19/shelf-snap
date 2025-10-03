@@ -1,24 +1,3 @@
-<!--
-ShelfSnap MVP (PWA) - v0.1
-Mobile-first web app to capture product photos, scan barcode to name file as EAN.jpg, manage library, and export ZIP.
-Assumptions per spec: 
-- iOS Safari + Android Chrome. PWA installable.
-- 1 photo per EAN (overwrite silently).
-- Full-quality images. Show nudge to export when approaching storage/memory limits.
-- Manual EAN entry fallback. No barcode photo persistence.
-- Export only when user taps Export. Downloads ZIP named product_photos_<YYYYMMDD_HHMM>.zip
-
-Files in this single document:
-1) index.html (this document)
-2) manifest.webmanifest (embedded below; copy to project root)
-3) service-worker.js (embedded; copy to project root)
-
-External libs via CDN:
-- ZXing (@zxing/library) for barcode scanning
-- JSZip for ZIP export
-No server required. Just host these three files and the icons.
--->
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -49,7 +28,6 @@ No server required. Just host these three files and the icons.
     label{font-size:12px;color:var(--muted)}
     video, canvas, img{width:100%;border-radius:12px;background:#000}
     .thumb{width:64px;height:64px;object-fit:cover;border-radius:8px;border:1px solid #333}
-    .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
     .toolbar{position:fixed;bottom:0;left:0;right:0;background:rgba(16,16,18,.95);backdrop-filter:blur(6px);border-top:1px solid #222;padding:10px;display:flex;gap:10px;justify-content:space-around}
     .toolbar button{flex:1}
     .pill{display:inline-flex;gap:6px;padding:6px 10px;border-radius:999px;background:#1a1a20;border:1px solid #2a2a2f;color:var(--muted);font-size:12px}
@@ -64,7 +42,6 @@ No server required. Just host these three files and the icons.
   </header>
 
   <div class="container">
-    <!-- Capture Card -->
     <section class="card" id="captureCard">
       <div class="col">
         <div class="row" style="justify-content:space-between;align-items:center">
@@ -74,26 +51,19 @@ No server required. Just host these three files and the icons.
           </div>
           <button class="ghost" id="flipBtn" title="Flip camera">🔁</button>
         </div>
-        <div style="position:relative">
-          <video id="video" playsinline autoplay muted></video>
-          <div class="overlay" aria-hidden></div>
+        <div style="position:relative;height:70vh;display:flex;flex-direction:column;justify-content:center;align-items:center;">
+          <video id="video" playsinline autoplay muted style="flex:1"></video>
+          <canvas id="snapCanvas" class="hidden"></canvas>
+          <img id="shotImg" class="hidden" alt="Shot preview" style="flex:1;object-fit:contain" />
         </div>
-        <div class="row">
+        <div class="row" style="justify-content:center">
           <button class="primary" id="shootBtn">Take photo</button>
-          <button class="secondary" id="stopCamBtn">Stop camera</button>
-        </div>
-        <canvas id="snapCanvas" class="hidden"></canvas>
-        <div id="shotPreview" class="hidden col">
-          <img id="shotImg" alt="Shot preview" />
-          <div class="row">
-            <button class="secondary" id="retakeBtn">Retake</button>
-            <button class="primary" id="toScanBtn">Use this</button>
-          </div>
+          <button class="secondary hidden" id="retakeBtn">Retake</button>
+          <button class="primary hidden" id="toScanBtn">Use this</button>
         </div>
       </div>
     </section>
 
-    <!-- Scan Card -->
     <section class="card" id="scanCard">
       <div class="col">
         <strong>2) Scan barcode (EAN)</strong>
@@ -114,7 +84,6 @@ No server required. Just host these three files and the icons.
       </div>
     </section>
 
-    <!-- Library Card -->
     <section class="card" id="libraryCard">
       <div class="row" style="justify-content:space-between;align-items:center">
         <strong>Library</strong>
@@ -123,26 +92,15 @@ No server required. Just host these three files and the icons.
       <div id="libraryList" class="col"></div>
     </section>
 
-    <!-- Export Card -->
     <section class="card" id="exportCard">
       <div class="col">
         <strong>Export</strong>
-        <span class="hint">Downloads a ZIP to your phone. Keep app open during export.</span>
         <div class="row">
           <button class="primary" id="exportBtn">Export ZIP</button>
           <button class="ghost" id="clearAllBtn">Clear all</button>
         </div>
         <div id="exportStatus" class="hint">Idle</div>
       </div>
-    </section>
-
-    <section class="card" id="proTips">
-      <strong>Pro tips</strong>
-      <ul class="hint">
-        <li>Good light, fill the frame, avoid tilt.</li>
-        <li>Blur check runs on capture; you’ll be warned if too soft.</li>
-        <li>Duplicate EANs overwrite the previous photo (by design).</li>
-      </ul>
     </section>
   </div>
 
@@ -152,17 +110,14 @@ No server required. Just host these three files and the icons.
     <button class="primary" id="navExport">Export</button>
   </nav>
 
-  <!-- External libs -->
   <script src="https://unpkg.com/@zxing/library@0.20.0"></script>
   <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 
   <script>
-  // ====== PWA install & SW ======
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./service-worker.js').catch(console.error);
   }
 
-  // ====== Simple IndexedDB wrapper ======
   const DB_NAME = 'shelfsnap-db';
   const DB_STORE = 'photos';
   function openDB() {
@@ -171,8 +126,7 @@ No server required. Just host these three files and the icons.
       req.onupgradeneeded = () => {
         const db = req.result;
         if (!db.objectStoreNames.contains(DB_STORE)) {
-          const store = db.createObjectStore(DB_STORE, { keyPath: 'ean' });
-          store.createIndex('createdAt', 'createdAt');
+          db.createObjectStore(DB_STORE, { keyPath: 'ean' });
         }
       };
       req.onsuccess = () => resolve(req.result);
@@ -181,43 +135,30 @@ No server required. Just host these three files and the icons.
   }
   async function dbPut(item){ const db=await openDB(); return new Promise((res,rej)=>{ const tx=db.transaction(DB_STORE,'readwrite'); tx.objectStore(DB_STORE).put(item); tx.oncomplete=()=>res(); tx.onerror=()=>rej(tx.error); }); }
   async function dbGetAll(){ const db=await openDB(); return new Promise((res,rej)=>{ const tx=db.transaction(DB_STORE,'readonly'); const req=tx.objectStore(DB_STORE).getAll(); req.onsuccess=()=>res(req.result||[]); req.onerror=()=>rej(req.error); }); }
-  async function dbGet(ean){ const db=await openDB(); return new Promise((res,rej)=>{ const tx=db.transaction(DB_STORE,'readonly'); const req=tx.objectStore(DB_STORE).get(ean); req.onsuccess=()=>res(req.result||null); req.onerror=()=>rej(req.error); }); }
   async function dbDel(ean){ const db=await openDB(); return new Promise((res,rej)=>{ const tx=db.transaction(DB_STORE,'readwrite'); tx.objectStore(DB_STORE).delete(ean); tx.oncomplete=()=>res(); tx.onerror=()=>rej(tx.error); }); }
   async function dbClear(){ const db=await openDB(); return new Promise((res,rej)=>{ const tx=db.transaction(DB_STORE,'readwrite'); tx.objectStore(DB_STORE).clear(); tx.oncomplete=()=>res(); tx.onerror=()=>rej(tx.error); }); }
 
-  // ====== Utilities ======
   const $ = sel => document.querySelector(sel);
-  const $$ = sel => Array.from(document.querySelectorAll(sel));
-  function fmtTs(d=new Date()){
-    const p=n=>String(n).padStart(2,'0');
-    return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`;
-  }
   function isValidEAN(str){ return /^[0-9]{8}$/.test(str) || /^[0-9]{13}$/.test(str); }
-  function estBlobSize(blob){ return blob.size; }
+  function fmtTs(d=new Date()){ const p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`; }
 
-  // Heuristic threshold to nudge export (iOS Safari can be fragile):
-  const NUDGE_COUNT = 250;  // prompt when > 250 photos
-  const NUDGE_BYTES = 200 * 1024 * 1024; // or ~200MB total
-
-  // ====== Camera (capture) ======
-  let camStream = null;
   let facing = 'environment';
+  let capturedBlob = null;
+
   const video = $('#video');
-  const flipBtn = $('#flipBtn');
-  const shootBtn = $('#shootBtn');
-  const stopCamBtn = $('#stopCamBtn');
-  const snapCanvas = $('#snapCanvas');
-  const shotPreview = $('#shotPreview');
   const shotImg = $('#shotImg');
+  const snapCanvas = $('#snapCanvas');
+  const shootBtn = $('#shootBtn');
+  const retakeBtn = $('#retakeBtn');
+  const toScanBtn = $('#toScanBtn');
 
   async function startCamera(targetVideo){
     try{
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing, width:{ideal:1920}, height:{ideal:1080} }, audio:false });
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing, width:{ideal:1280}, height:{ideal:720} }, audio:false });
       stopCamera(targetVideo);
       targetVideo.srcObject = stream;
-      camStream = stream;
       await targetVideo.play();
-    }catch(e){ alert('Camera access failed. Please allow camera permission.'); console.error(e); }
+    }catch(e){ alert('Camera access failed'); }
   }
   function stopCamera(targetVideo){
     if (targetVideo && targetVideo.srcObject){
@@ -226,269 +167,109 @@ No server required. Just host these three files and the icons.
     }
   }
 
-  flipBtn.addEventListener('click', async()=>{ facing = (facing==='environment'?'user':'environment'); await startCamera(video); });
-  stopCamBtn.addEventListener('click', ()=> stopCamera(video));
-
   shootBtn.addEventListener('click', ()=>{
     if(!video.videoWidth) return;
-    const w = video.videoWidth; const h = video.videoHeight;
-    snapCanvas.width = w; snapCanvas.height = h;
-    const ctx = snapCanvas.getContext('2d');
-    ctx.drawImage(video, 0, 0, w, h);
-    // Basic sharpness check (variance of Laplacian approximation)
-    const imgData = ctx.getImageData(0,0,w,h);
-    let variance = 0; // simple proxy: sample every 24th pixel
-    for(let i=0;i<imgData.data.length;i+=4*24){ const g = imgData.data[i]*0.3+imgData.data[i+1]*0.59+imgData.data[i+2]*0.11; variance += g; }
-    variance /= (imgData.data.length/(4*24));
-    // Not a real Laplacian, but give a gentle nudge only
-    if (variance < 40){ // arbitrary low-light/flat estimate
-      if (!confirm('Image may be soft/low-contrast. Use anyway?')) return;
-    }
+    snapCanvas.width = video.videoWidth; snapCanvas.height = video.videoHeight;
+    snapCanvas.getContext('2d').drawImage(video,0,0);
     snapCanvas.toBlob(b=>{
-      const url = URL.createObjectURL(b);
-      shotImg.src = url;
-      shotImg.dataset.blobUrl = url;
-      shotImg.dataset.blobSize = String(b.size);
-      shotImg.dataset.mime = b.type;
-      shotPreview.classList.remove('hidden');
-    }, 'image/jpeg', 0.98); // high quality
+      capturedBlob = b;
+      shotImg.src = URL.createObjectURL(b);
+      video.classList.add('hidden');
+      shotImg.classList.remove('hidden');
+      shootBtn.classList.add('hidden');
+      retakeBtn.classList.remove('hidden');
+      toScanBtn.classList.remove('hidden');
+    }, 'image/jpeg', 0.98);
   });
 
-  $('#retakeBtn').addEventListener('click', ()=>{
-    shotPreview.classList.add('hidden');
-    if(!video.srcObject) startCamera(video);
+  retakeBtn.addEventListener('click', ()=>{
+    shotImg.classList.add('hidden');
+    video.classList.remove('hidden');
+    shootBtn.classList.remove('hidden');
+    retakeBtn.classList.add('hidden');
+    toScanBtn.classList.add('hidden');
+    capturedBlob = null;
+    startCamera(video);
   });
 
-  $('#toScanBtn').addEventListener('click', ()=>{
-    // Move to scan section
+  toScanBtn.addEventListener('click', ()=>{
     document.getElementById('scanCard').scrollIntoView({behavior:'smooth'});
-    if(!scanVideo.srcObject) startCamera(scanVideo);
+    startCamera($('#scanVideo'));
   });
 
-  // ====== Barcode scanning ======
   const scanVideo = $('#scanVideo');
   const startScanBtn = $('#startScanBtn');
   const stopScanBtn = $('#stopScanBtn');
   const eanInput = $('#eanInput');
   const saveWithEanBtn = $('#saveWithEanBtn');
   const scanStatus = $('#scanStatus');
-
   let codeReader = null;
+
   startScanBtn.addEventListener('click', async()=>{
-    try{
-      if(!codeReader) codeReader = new ZXing.BrowserMultiFormatReader();
-      await startCamera(scanVideo);
-      scanStatus.textContent = 'Scanning…';
-      const controls = await codeReader.decodeFromVideoDevice(undefined, scanVideo, (result, err)=>{
-        if (result) {
-          const text = result.getText();
-          eanInput.value = text;
-          scanStatus.textContent = `Detected: ${text}`;
-        }
-      });
-      // Store to stop later
-      scanVideo._controls = controls;
-    }catch(e){ console.error(e); alert('Barcode scanning failed. Try manual entry.'); }
+    if(!codeReader) codeReader = new ZXing.BrowserMultiFormatReader();
+    await startCamera(scanVideo);
+    scanStatus.textContent = 'Scanning…';
+    await codeReader.decodeFromVideoDevice(undefined, scanVideo, (result, err)=>{
+      if(result){
+        eanInput.value = result.getText();
+        scanStatus.textContent = `Detected: ${result.getText()}`;
+      }
+    });
   });
 
   stopScanBtn.addEventListener('click', ()=>{
-    if(codeReader){ try{ codeReader.reset(); }catch{} }
+    if(codeReader) codeReader.reset();
     stopCamera(scanVideo);
-    scanStatus.textContent = 'Stopped';
   });
 
   saveWithEanBtn.addEventListener('click', async()=>{
     const ean = eanInput.value.trim();
-    if(!isValidEAN(ean)) { alert('Please enter a valid EAN-8 or EAN-13'); return; }
-    const blobUrl = shotImg.dataset.blobUrl;
-    if(!blobUrl) { alert('No captured photo found. Take a photo first.'); return; }
-    const blob = await fetch(blobUrl).then(r=>r.blob());
-
-    const item = { ean, filename: `${ean}.jpg`, blob, createdAt: Date.now(), updatedAt: Date.now() };
-    await dbPut(item);
-    URL.revokeObjectURL(blobUrl);
-    shotPreview.classList.add('hidden');
-    eanInput.value=''; scanStatus.textContent='Saved ✓';
+    if(!isValidEAN(ean)){ alert('Invalid EAN'); return; }
+    if(!capturedBlob){ alert('No captured photo'); return; }
+    await dbPut({ ean, filename:`${ean}.jpg`, blob:capturedBlob, createdAt:Date.now(), updatedAt:Date.now() });
+    capturedBlob=null;
+    eanInput.value='';
+    scanStatus.textContent='Saved ✓';
     refreshLibrary();
-    maybeNudgeToExport();
   });
-
-  // ====== Library ======
-  const libraryList = $('#libraryList');
-  const countHint = $('#countHint');
 
   async function refreshLibrary(){
     const items = await dbGetAll();
-    items.sort((a,b)=>b.updatedAt - a.updatedAt);
-    countHint.textContent = `${items.length} item${items.length!==1?'s':''}`;
-    libraryList.innerHTML = '';
-    for(const it of items){
+    const libraryList=$('#libraryList');
+    const countHint=$('#countHint');
+    libraryList.innerHTML='';
+    countHint.textContent=`${items.length} items`;
+    items.forEach(it=>{
       const url = URL.createObjectURL(it.blob);
-      const row = document.createElement('div');
-      row.className = 'row';
-      row.style.justifyContent='space-between';
-      row.style.alignItems='center';
-      row.style.borderTop='1px solid #222';
-      row.style.padding='8px 0';
-      row.innerHTML = `
-        <div class="row" style="gap:12px;align-items:center">
-          <img class="thumb" src="${url}" alt="thumb" />
-          <div class="col">
-            <strong>${it.filename}</strong>
-            <span class="hint">${new Date(it.updatedAt).toLocaleString()}</span>
-          </div>
-        </div>
-        <div class="row" style="gap:8px">
-          <button class="ghost" data-ean="${it.ean}" data-action="retake">Retake</button>
-          <button class="secondary" data-ean="${it.ean}" data-action="rename">Rename</button>
-          <button class="danger" data-ean="${it.ean}" data-action="delete">Delete</button>
-        </div>
-      `;
+      const row=document.createElement('div');
+      row.className='row';
+      row.innerHTML=`<img class="thumb" src="${url}"/><div class="col"><strong>${it.filename}</strong></div>`;
       libraryList.appendChild(row);
-    }
-  }
-
-  libraryList.addEventListener('click', async(e)=>{
-    const btn = e.target.closest('button');
-    if(!btn) return;
-    const ean = btn.dataset.ean;
-    const action = btn.dataset.action;
-    if(action==='delete'){
-      await dbDel(ean); refreshLibrary(); return;
-    }
-    if(action==='rename'){
-      const item = await dbGet(ean); if(!item) return;
-      const newE = prompt('Enter new EAN (8 or 13 digits):', ean);
-      if(!newE || !isValidEAN(newE)) return alert('Invalid EAN');
-      // Delete old, put new
-      await dbDel(ean);
-      await dbPut({ ean:newE, filename:`${newE}.jpg`, blob:item.blob, createdAt:item.createdAt, updatedAt:Date.now() });
-      refreshLibrary(); return;
-    }
-    if(action==='retake'){
-      // Jump to capture maintaining EAN; after shot, auto-save with same EAN
-      const keptEan = ean;
-      document.getElementById('captureCard').scrollIntoView({behavior:'smooth'});
-      if(!video.srcObject) await startCamera(video);
-      // Hook the next "Use this" click to save under the same EAN
-      const handler = async ()=>{
-        const blob = await new Promise(res=> snapCanvas.toBlob(res, 'image/jpeg', 0.98));
-        await dbPut({ ean: keptEan, filename:`${keptEan}.jpg`, blob, createdAt: Date.now(), updatedAt: Date.now() });
-        shotPreview.classList.add('hidden');
-        $('#toScanBtn').removeEventListener('click', handler);
-        refreshLibrary(); maybeNudgeToExport();
-      };
-      $('#toScanBtn').addEventListener('click', handler, { once:true });
-    }
-  });
-
-  // ====== Export ======
-  const exportBtn = $('#exportBtn');
-  const exportStatus = $('#exportStatus');
-  const clearAllBtn = $('#clearAllBtn');
-
-  exportBtn.addEventListener('click', async()=>{
-    const items = await dbGetAll();
-    if(!items.length){ alert('Nothing to export.'); return; }
-    exportStatus.textContent = 'Building ZIP…';
-    const zip = new JSZip();
-
-    // Add files progressively to reduce memory spikes
-    for (let i=0;i<items.length;i++){
-      const it = items[i];
-      const arrBuf = await it.blob.arrayBuffer();
-      zip.file(it.filename, arrBuf);
-      exportStatus.textContent = `Packing ${i+1}/${items.length}…`;
-      await new Promise(r=>setTimeout(r)); // yield to UI
-    }
-
-    const blob = await zip.generateAsync({ type:'blob', streamFiles:true, compression:'STORE' }, (meta)=>{
-      exportStatus.textContent = `Compressing… ${Math.round(meta.percent)}%`;
     });
-
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `product_photos_${fmtTs()}.zip`;
-    a.click();
-    URL.revokeObjectURL(a.href);
-    exportStatus.textContent = 'Done ✓';
-  });
-
-  clearAllBtn.addEventListener('click', async()=>{
-    if(confirm('Delete ALL photos? This cannot be undone.')){
-      await dbClear(); refreshLibrary();
-    }
-  });
-
-  // ====== Nudge before Safari blows up ======
-  async function maybeNudgeToExport(){
-    const items = await dbGetAll();
-    if(items.length > NUDGE_COUNT){
-      alert('You have a lot of photos. Consider exporting now to avoid browser limits.');
-      return;
-    }
-    let total = 0; for(const it of items){ total += estBlobSize(it.blob); }
-    if(total > NUDGE_BYTES){
-      alert('Storage size is getting large. Please export a ZIP now for safety.');
-    }
   }
 
-  // ====== Nav ======
-  $('#navCapture').addEventListener('click', ()=> document.getElementById('captureCard').scrollIntoView({behavior:'smooth'}));
-  $('#navLibrary').addEventListener('click', ()=>{ refreshLibrary(); document.getElementById('libraryCard').scrollIntoView({behavior:'smooth'}); });
-  $('#navExport').addEventListener('click', ()=> document.getElementById('exportCard').scrollIntoView({behavior:'smooth'}));
+  $('#exportBtn').addEventListener('click', async()=>{
+    const items = await dbGetAll();
+    if(!items.length){ alert('Nothing to export'); return; }
+    const zip = new JSZip();
+    for(const it of items){
+      zip.file(it.filename, await it.blob.arrayBuffer());
+    }
+    const blob = await zip.generateAsync({type:'blob'});
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download=`product_photos_${fmtTs()}.zip`;
+    a.click();
+  });
 
-  // ====== Init ======
-  const statusPill = $('#statusPill');
-  window.addEventListener('online', ()=> statusPill.textContent='Online');
-  window.addEventListener('offline', ()=> statusPill.textContent='Offline');
-  // Start capture camera immediately
-  startCamera(video).then(()=>{});
+  $('#clearAllBtn').addEventListener('click', async()=>{ await dbClear(); refreshLibrary(); });
+
+  $('#navCapture').addEventListener('click',()=>document.getElementById('captureCard').scrollIntoView({behavior:'smooth'}));
+  $('#navLibrary').addEventListener('click',()=>{refreshLibrary();document.getElementById('libraryCard').scrollIntoView({behavior:'smooth'});});
+  $('#navExport').addEventListener('click',()=>document.getElementById('exportCard').scrollIntoView({behavior:'smooth'}));
+
+  startCamera(video);
   refreshLibrary();
   </script>
-
-  <!-- ================= manifest.webmanifest (copy to /manifest.webmanifest) ================= -->
-  <!--
-  {
-    "name": "ShelfSnap",
-    "short_name": "ShelfSnap",
-    "start_url": "/index.html",
-    "display": "standalone",
-    "background_color": "#0b0b0c",
-    "theme_color": "#0b0b0c",
-    "icons": [
-      { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
-      { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" }
-    ]
-  }
-  -->
-
-  <!-- ================= service-worker.js (copy to /service-worker.js) ================= -->
-  <!--
-  const CACHE_NAME = 'shelfsnap-cache-v1';
-  const ASSETS = [
-    '/', '/index.html', '/manifest.webmanifest',
-    '/icons/icon-192.png', '/icons/icon-512.png',
-    'https://unpkg.com/@zxing/library@0.20.0',
-    'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js'
-  ];
-  self.addEventListener('install', (e)=>{
-    e.waitUntil(caches.open(CACHE_NAME).then(c=>c.addAll(ASSETS)));
-    self.skipWaiting();
-  });
-  self.addEventListener('activate', (e)=>{
-    e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE_NAME).map(k=>caches.delete(k)))));
-    self.clients.claim();
-  });
-  self.addEventListener('fetch', (e)=>{
-    const url = new URL(e.request.url);
-    if(url.origin === location.origin){
-      e.respondWith(caches.match(e.request).then(r=> r || fetch(e.request)));
-    } else {
-      e.respondWith(fetch(e.request).catch(()=> caches.match(e.request)));
-    }
-  });
-  -->
-
 </body>
 </html>
