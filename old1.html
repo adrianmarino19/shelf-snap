@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>ShelfSnap</title>
+  <meta name="theme-color" content="#111111" />
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="apple-touch-icon" href="./icons/icon-192.png" />
+  <style>
+    :root { --bg:#0b0b0c; --card:#141417; --ink:#fafafa; --muted:#9aa0a6; --accent:#5ee0a0; --warn:#ffb020; --danger:#ff5a5f; }
+    *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+    html,body{margin:0;height:100%;font-family:system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; background:var(--bg); color:var(--ink)}
+    header{position:sticky;top:0;z-index:9;background:var(--bg);padding:12px 16px;border-bottom:1px solid #222}
+    header h1{font-size:18px;margin:0;display:flex;gap:8px;align-items:center}
+    .container{padding:12px 12px 88px;max-width:720px;margin:0 auto}
+    .card{background:var(--card);border:1px solid #222;border-radius:16px;padding:12px;margin:12px 0}
+    .row{display:flex;gap:12px;align-items:center}
+    .col{display:flex;flex-direction:column;gap:8px}
+    button, .btn{appearance:none;border:none;border-radius:12px;padding:12px 14px;font-weight:600}
+    button.primary{background:var(--accent)}
+    button.secondary{background:#2a2a2f;color:var(--ink)}
+    button.ghost{background:transparent;border:1px solid #333;color:var(--ink)}
+    button.warn{background:var(--warn);color:#111}
+    button.danger{background:var(--danger)}
+    button:disabled{opacity:.5}
+    input, select{background:#101114;border:1px solid #2a2a2f;border-radius:10px;color:var(--ink);padding:10px 12px}
+    label{font-size:12px;color:var(--muted)}
+    video, canvas, img{width:100%;border-radius:12px;background:#000}
+    .thumb{width:64px;height:64px;object-fit:cover;border-radius:8px;border:1px solid #333}
+    .toolbar{position:fixed;bottom:0;left:0;right:0;background:rgba(16,16,18,.95);backdrop-filter:blur(6px);border-top:1px solid #222;padding:10px;display:flex;gap:10px;justify-content:space-around}
+    .toolbar button{flex:1}
+    .pill{display:inline-flex;gap:6px;padding:6px 10px;border-radius:999px;background:#1a1a20;border:1px solid #2a2a2f;color:var(--muted);font-size:12px}
+    .hint{font-size:12px;color:var(--muted)}
+    .overlay{position:absolute;inset:0;pointer-events:none;border:2px dashed rgba(255,255,255,.25);border-radius:12px;margin:6%}
+    .hidden{display:none}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>📸 ShelfSnap <span class="pill" id="statusPill">Offline-ready</span></h1>
+  </header>
+
+  <div class="container">
+    <section class="card" id="captureCard">
+      <div class="col">
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <div class="col">
+            <strong>1) Capture product</strong>
+            <span class="hint">Frame face-on, avoid glare; single SKU filling the frame.</span>
+          </div>
+          <button class="ghost" id="flipBtn" title="Flip camera">🔁</button>
+        </div>
+        <div style="position:relative;height:70vh;display:flex;flex-direction:column;justify-content:center;align-items:center;">
+          <video id="video" playsinline autoplay muted style="flex:1"></video>
+          <canvas id="snapCanvas" class="hidden"></canvas>
+          <img id="shotImg" class="hidden" alt="Shot preview" style="flex:1;object-fit:contain" />
+        </div>
+        <div class="row" style="justify-content:center">
+          <button class="primary" id="shootBtn">Take photo</button>
+          <button class="secondary hidden" id="retakeBtn">Retake</button>
+          <button class="primary hidden" id="toScanBtn">Use this</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" id="scanCard">
+      <div class="col">
+        <strong>2) Scan barcode (EAN)</strong>
+        <span class="hint">Point camera at barcode. If it fails, enter manually.</span>
+        <video id="scanVideo" playsinline autoplay muted></video>
+        <div class="row">
+          <button class="secondary" id="startScanBtn">Start scan</button>
+          <button class="ghost" id="stopScanBtn">Stop scan</button>
+        </div>
+        <div class="row">
+          <div class="col" style="flex:1">
+            <label for="eanInput">Manual EAN</label>
+            <input id="eanInput" inputmode="numeric" placeholder="e.g., 5601234567890" />
+          </div>
+          <button class="primary" id="saveWithEanBtn" style="align-self:end">Save</button>
+        </div>
+        <span id="scanStatus" class="hint">Waiting…</span>
+      </div>
+    </section>
+
+    <section class="card" id="libraryCard">
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <strong>Library</strong>
+        <span class="hint" id="countHint">0 items</span>
+      </div>
+      <div id="libraryList" class="col"></div>
+    </section>
+
+    <section class="card" id="exportCard">
+      <div class="col">
+        <strong>Export</strong>
+        <div class="row">
+          <button class="primary" id="exportBtn">Export ZIP</button>
+          <button class="ghost" id="clearAllBtn">Clear all</button>
+        </div>
+        <div id="exportStatus" class="hint">Idle</div>
+      </div>
+    </section>
+  </div>
+
+  <nav class="toolbar">
+    <button class="secondary" id="navCapture">Capture</button>
+    <button class="secondary" id="navLibrary">Library</button>
+    <button class="primary" id="navExport">Export</button>
+  </nav>
+
+  <script src="https://unpkg.com/@zxing/library@0.20.0"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+
+  <script>
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./service-worker.js').catch(console.error);
+  }
+
+  const DB_NAME = 'shelfsnap-db';
+  const DB_STORE = 'photos';
+  function openDB() {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(DB_STORE)) {
+          db.createObjectStore(DB_STORE, { keyPath: 'ean' });
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  async function dbPut(item){ const db=await openDB(); return new Promise((res,rej)=>{ const tx=db.transaction(DB_STORE,'readwrite'); tx.objectStore(DB_STORE).put(item); tx.oncomplete=()=>res(); tx.onerror=()=>rej(tx.error); }); }
+  async function dbGetAll(){ const db=await openDB(); return new Promise((res,rej)=>{ const tx=db.transaction(DB_STORE,'readonly'); const req=tx.objectStore(DB_STORE).getAll(); req.onsuccess=()=>res(req.result||[]); req.onerror=()=>rej(req.error); }); }
+  async function dbDel(ean){ const db=await openDB(); return new Promise((res,rej)=>{ const tx=db.transaction(DB_STORE,'readwrite'); tx.objectStore(DB_STORE).delete(ean); tx.oncomplete=()=>res(); tx.onerror=()=>rej(tx.error); }); }
+  async function dbClear(){ const db=await openDB(); return new Promise((res,rej)=>{ const tx=db.transaction(DB_STORE,'readwrite'); tx.objectStore(DB_STORE).clear(); tx.oncomplete=()=>res(); tx.onerror=()=>rej(tx.error); }); }
+
+  const $ = sel => document.querySelector(sel);
+  function isValidEAN(str){ return /^[0-9]{8}$/.test(str) || /^[0-9]{13}$/.test(str); }
+  function fmtTs(d=new Date()){ const p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`; }
+
+  let facing = 'environment';
+  let capturedBlob = null;
+
+  const video = $('#video');
+  const shotImg = $('#shotImg');
+  const snapCanvas = $('#snapCanvas');
+  const shootBtn = $('#shootBtn');
+  const retakeBtn = $('#retakeBtn');
+  const toScanBtn = $('#toScanBtn');
+
+  async function startCamera(targetVideo){
+    try{
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing, width:{ideal:1280}, height:{ideal:720} }, audio:false });
+      stopCamera(targetVideo);
+      targetVideo.srcObject = stream;
+      await targetVideo.play();
+    }catch(e){ alert('Camera access failed'); }
+  }
+  function stopCamera(targetVideo){
+    if (targetVideo && targetVideo.srcObject){
+      targetVideo.srcObject.getTracks().forEach(t=>t.stop());
+      targetVideo.srcObject = null;
+    }
+  }
+
+  shootBtn.addEventListener('click', ()=>{
+    if(!video.videoWidth) return;
+    snapCanvas.width = video.videoWidth; snapCanvas.height = video.videoHeight;
+    snapCanvas.getContext('2d').drawImage(video,0,0);
+    snapCanvas.toBlob(b=>{
+      capturedBlob = b;
+      shotImg.src = URL.createObjectURL(b);
+      video.classList.add('hidden');
+      shotImg.classList.remove('hidden');
+      shootBtn.classList.add('hidden');
+      retakeBtn.classList.remove('hidden');
+      toScanBtn.classList.remove('hidden');
+    }, 'image/jpeg', 0.98);
+  });
+
+  retakeBtn.addEventListener('click', ()=>{
+    shotImg.classList.add('hidden');
+    video.classList.remove('hidden');
+    shootBtn.classList.remove('hidden');
+    retakeBtn.classList.add('hidden');
+    toScanBtn.classList.add('hidden');
+    capturedBlob = null;
+    startCamera(video);
+  });
+
+  toScanBtn.addEventListener('click', ()=>{
+    document.getElementById('scanCard').scrollIntoView({behavior:'smooth'});
+    startCamera($('#scanVideo'));
+  });
+
+  const scanVideo = $('#scanVideo');
+  const startScanBtn = $('#startScanBtn');
+  const stopScanBtn = $('#stopScanBtn');
+  const eanInput = $('#eanInput');
+  const saveWithEanBtn = $('#saveWithEanBtn');
+  const scanStatus = $('#scanStatus');
+  let codeReader = null;
+
+  startScanBtn.addEventListener('click', async()=>{
+    if(!codeReader) codeReader = new ZXing.BrowserMultiFormatReader();
+    await startCamera(scanVideo);
+    scanStatus.textContent = 'Scanning…';
+    await codeReader.decodeFromVideoDevice(undefined, scanVideo, (result, err)=>{
+      if(result){
+        eanInput.value = result.getText();
+        scanStatus.textContent = `Detected: ${result.getText()}`;
+      }
+    });
+  });
+
+  stopScanBtn.addEventListener('click', ()=>{
+    if(codeReader) codeReader.reset();
+    stopCamera(scanVideo);
+  });
+
+  saveWithEanBtn.addEventListener('click', async()=>{
+    const ean = eanInput.value.trim();
+    if(!isValidEAN(ean)){ alert('Invalid EAN'); return; }
+    if(!capturedBlob){ alert('No captured photo'); return; }
+    await dbPut({ ean, filename:`${ean}.jpg`, blob:capturedBlob, createdAt:Date.now(), updatedAt:Date.now() });
+    capturedBlob=null;
+    eanInput.value='';
+    scanStatus.textContent='Saved ✓';
+    refreshLibrary();
+  });
+
+  async function refreshLibrary(){
+    const items = await dbGetAll();
+    const libraryList=$('#libraryList');
+    const countHint=$('#countHint');
+    libraryList.innerHTML='';
+    countHint.textContent=`${items.length} items`;
+    items.forEach(it=>{
+      const url = URL.createObjectURL(it.blob);
+      const row=document.createElement('div');
+      row.className='row';
+      row.innerHTML=`<img class="thumb" src="${url}"/><div class="col"><strong>${it.filename}</strong></div>`;
+      libraryList.appendChild(row);
+    });
+  }
+
+  $('#exportBtn').addEventListener('click', async()=>{
+    const items = await dbGetAll();
+    if(!items.length){ alert('Nothing to export'); return; }
+    const zip = new JSZip();
+    for(const it of items){
+      zip.file(it.filename, await it.blob.arrayBuffer());
+    }
+    const blob = await zip.generateAsync({type:'blob'});
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download=`product_photos_${fmtTs()}.zip`;
+    a.click();
+  });
+
+  $('#clearAllBtn').addEventListener('click', async()=>{ await dbClear(); refreshLibrary(); });
+
+  $('#navCapture').addEventListener('click',()=>document.getElementById('captureCard').scrollIntoView({behavior:'smooth'}));
+  $('#navLibrary').addEventListener('click',()=>{refreshLibrary();document.getElementById('libraryCard').scrollIntoView({behavior:'smooth'});});
+  $('#navExport').addEventListener('click',()=>document.getElementById('exportCard').scrollIntoView({behavior:'smooth'}));
+
+  startCamera(video);
+  refreshLibrary();
+  </script>
+</body>
+</html>
